@@ -49,25 +49,37 @@ const App: React.FC = () => {
 
   // Supabase auth state management
   useEffect(() => {
+    let cancelled = false;
+
     // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (cancelled) return;
       if (session) {
-        getCurrentAppUser().then(appUser => {
-          setUser(appUser);
-          setAuthLoading(false);
-        });
-      } else {
-        setAuthLoading(false);
+        try {
+          const appUser = await getCurrentAppUser();
+          if (!cancelled) setUser(appUser);
+        } catch (err) {
+          console.error('Failed to load user profile:', err);
+        }
       }
+      if (!cancelled) setAuthLoading(false);
+    }).catch(err => {
+      console.error('Failed to get session:', err);
+      if (!cancelled) setAuthLoading(false);
     });
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        if (cancelled) return;
         if (event === 'SIGNED_IN' && session) {
-          const appUser = await getCurrentAppUser();
-          setUser(appUser);
-          setAuthLoading(false);
+          try {
+            const appUser = await getCurrentAppUser();
+            if (!cancelled) setUser(appUser);
+          } catch (err) {
+            console.error('Failed to load user on sign-in:', err);
+          }
+          if (!cancelled) setAuthLoading(false);
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
           setAuthLoading(false);
@@ -75,7 +87,10 @@ const App: React.FC = () => {
       }
     );
 
-    return () => subscription.unsubscribe();
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
   }, []);
 
   // Load saved projects from Supabase when user logs in
