@@ -1,0 +1,28 @@
+openapi: 3.0.0
+info:
+  title: Book Creator AI API
+  version: 1.0.0
+paths:
+  /projects:
+    post:
+      summary: Create a new book project
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                keyword: {type: string}
+                genre: {type: string}
+  /projects/{id}/structure:
+    post:
+      summary: Generate TOC
+  /chapters/{id}/generate:
+    post:
+      summary: Generate chapter content
+      parameters:
+        - name: mode
+          in: query
+          schema:
+            type: string
+            enum: [draft, rewrite, expand]
