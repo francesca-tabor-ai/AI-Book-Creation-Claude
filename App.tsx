@@ -59,21 +59,32 @@ const App: React.FC = () => {
     // Use onAuthStateChange as the single source of truth
     // It fires INITIAL_SESSION on setup, then SIGNED_IN/SIGNED_OUT on changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        console.log('[AUTH]', event, 'cancelled=', cancelled, 'hasSession=', !!session?.user);
+      (event, session) => {
         if (cancelled) return;
         if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
           if (session?.user) {
-            try {
-              // Pass session.user directly to avoid getUser() deadlock inside onAuthStateChange
-              const appUser = await getCurrentAppUser(session.user);
-              console.log('[AUTH] appUser result:', appUser ? appUser.email : 'NULL');
-              if (!cancelled) setUser(appUser);
-            } catch (err) {
-              console.error('[AUTH] Failed to load user profile:', err);
-            }
-          }
-          if (!cancelled) {
+            // Defer profile fetch to next tick to avoid Supabase client deadlock
+            // inside onAuthStateChange callback
+            const authUser = session.user;
+            setTimeout(async () => {
+              if (cancelled) return;
+              try {
+                const appUser = await getCurrentAppUser(authUser);
+                if (!cancelled) {
+                  setUser(appUser);
+                  setAuthLoading(false);
+                  clearTimeout(timeout);
+                }
+              } catch (err) {
+                console.error('Failed to load user profile:', err);
+                if (!cancelled) {
+                  setAuthLoading(false);
+                  clearTimeout(timeout);
+                }
+              }
+            }, 0);
+          } else {
+            // No session — show login
             setAuthLoading(false);
             clearTimeout(timeout);
           }
