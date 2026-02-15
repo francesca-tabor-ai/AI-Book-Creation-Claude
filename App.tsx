@@ -58,40 +58,47 @@ const App: React.FC = () => {
 
     // Use onAuthStateChange as the single source of truth
     // It fires INITIAL_SESSION on setup, then SIGNED_IN/SIGNED_OUT on changes
+    // Initialize auth: get session first, then listen for changes
+    const initAuth = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (cancelled) return;
+        if (session?.user) {
+          const appUser = await getCurrentAppUser(session.user);
+          if (!cancelled) {
+            setUser(appUser);
+          }
+        }
+      } catch (err) {
+        console.error('Auth init error:', err);
+      } finally {
+        if (!cancelled) {
+          setAuthLoading(false);
+          clearTimeout(timeout);
+        }
+      }
+    };
+    initAuth();
+
+    // Listen for subsequent auth changes (sign in, sign out, token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
         if (cancelled) return;
-        if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
-          if (session?.user) {
-            // Defer profile fetch to next tick to avoid Supabase client deadlock
-            // inside onAuthStateChange callback
-            const authUser = session.user;
+        if (event === 'SIGNED_IN') {
+          const authUser = session?.user;
+          if (authUser) {
             setTimeout(async () => {
               if (cancelled) return;
               try {
                 const appUser = await getCurrentAppUser(authUser);
-                if (!cancelled) {
-                  setUser(appUser);
-                  setAuthLoading(false);
-                  clearTimeout(timeout);
-                }
+                if (!cancelled) setUser(appUser);
               } catch (err) {
                 console.error('Failed to load user profile:', err);
-                if (!cancelled) {
-                  setAuthLoading(false);
-                  clearTimeout(timeout);
-                }
               }
             }, 0);
-          } else {
-            // No session — show login
-            setAuthLoading(false);
-            clearTimeout(timeout);
           }
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
-          setAuthLoading(false);
-          clearTimeout(timeout);
         }
       }
     );
