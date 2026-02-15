@@ -1,0 +1,7 @@
+{
+  "name": "AI Book Creation Studio",
+  "description": "An end-to-end AI-powered book creation platform that transforms a single keyword into a fully written, structured, and designed manuscript.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
