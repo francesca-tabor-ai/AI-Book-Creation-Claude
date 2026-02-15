@@ -40,9 +40,13 @@ export async function resetPassword(email: string): Promise<void> {
   if (error) throw error;
 }
 
-export async function getCurrentAppUser(): Promise<User | null> {
-  const { data: { user: authUser } } = await supabase.auth.getUser();
-  if (!authUser) return null;
+export async function getCurrentAppUser(authUser?: { id: string; email?: string; email_confirmed_at?: string | null; app_metadata: Record<string, unknown> }): Promise<User | null> {
+  // If no auth user passed, fetch from Supabase (safe to call outside onAuthStateChange)
+  if (!authUser) {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
+    authUser = user;
+  }
 
   // Retry once with delay to handle race condition with handle_new_user trigger
   let profile = await fetchProfile(authUser.id);

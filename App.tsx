@@ -62,9 +62,10 @@ const App: React.FC = () => {
       async (event, session) => {
         if (cancelled) return;
         if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
-          if (session) {
+          if (session?.user) {
             try {
-              const appUser = await getCurrentAppUser();
+              // Pass session.user directly to avoid getUser() deadlock inside onAuthStateChange
+              const appUser = await getCurrentAppUser(session.user);
               if (!cancelled) setUser(appUser);
             } catch (err) {
               console.error('Failed to load user profile:', err);
