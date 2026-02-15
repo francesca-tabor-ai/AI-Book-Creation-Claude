@@ -60,15 +60,17 @@ const App: React.FC = () => {
     // It fires INITIAL_SESSION on setup, then SIGNED_IN/SIGNED_OUT on changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        console.log('[AUTH]', event, 'cancelled=', cancelled, 'hasSession=', !!session?.user);
         if (cancelled) return;
         if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
           if (session?.user) {
             try {
               // Pass session.user directly to avoid getUser() deadlock inside onAuthStateChange
               const appUser = await getCurrentAppUser(session.user);
+              console.log('[AUTH] appUser result:', appUser ? appUser.email : 'NULL');
               if (!cancelled) setUser(appUser);
             } catch (err) {
-              console.error('Failed to load user profile:', err);
+              console.error('[AUTH] Failed to load user profile:', err);
             }
           }
           if (!cancelled) {
