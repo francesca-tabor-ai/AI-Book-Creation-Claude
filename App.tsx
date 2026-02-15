@@ -4,7 +4,10 @@ import { CreationStep, BookProject, BookConcept, Chapter, User, SubscriptionTier
 import ProgressBar from './components/ProgressBar';
 import AuthOverlay from './components/AuthOverlay';
 import BillingDashboard from './components/BillingDashboard';
-import * as Gemini from './services/geminiService';
+import { supabase } from './lib/supabase';
+import { getCurrentAppUser, signOut } from './services/authService';
+import * as AI from './services/aiService';
+import * as DB from './services/database';
 
 // Lazy loading the info page for better initial performance
 const InfoPage = lazy(() => import('./components/InfoPage'));
@@ -17,17 +20,18 @@ interface SavedProjectEntry {
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   const [showBilling, setShowBilling] = useState(false);
   const [view, setView] = useState<AppView>('editor');
   const [infoPage, setInfoPage] = useState<InfoPageType>('enterprise');
   const [isNavigating, setIsNavigating] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
-  
+
   const [step, setStep] = useState<CreationStep>(CreationStep.SETUP);
   const [loadingStep, setLoadingStep] = useState<string | null>(null);
   const [project, setProject] = useState<BookProject>({
-    id: Math.random().toString(36).substr(2, 9),
+    id: crypto.randomUUID(),
     keyword: '',
     description: '',
     genre: 'Non-Fiction',
@@ -43,114 +47,133 @@ const App: React.FC = () => {
   const [savedProjects, setSavedProjects] = useState<SavedProjectEntry[]>([]);
   const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
 
-  // Restore session and saved projects
+  // Supabase auth state management
   useEffect(() => {
-    const savedUser = localStorage.getItem('bookstudio_user');
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
-    }
-    const localProjects = localStorage.getItem('bookstudio_saved_projects');
-    if (localProjects) {
-      setSavedProjects(JSON.parse(localProjects));
-    }
+    // Get initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        getCurrentAppUser().then(appUser => {
+          setUser(appUser);
+          setAuthLoading(false);
+        });
+      } else {
+        setAuthLoading(false);
+      }
+    });
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (event === 'SIGNED_IN' && session) {
+          const appUser = await getCurrentAppUser();
+          setUser(appUser);
+          setAuthLoading(false);
+        } else if (event === 'SIGNED_OUT') {
+          setUser(null);
+          setAuthLoading(false);
+        }
+      }
+    );
+
+    return () => subscription.unsubscribe();
   }, []);
+
+  // Load saved projects from Supabase when user logs in
+  useEffect(() => {
+    if (!user) return;
+    loadSavedProjects();
+  }, [user?.id]);
+
+  const loadSavedProjects = async () => {
+    if (!user) return;
+    try {
+      const dbProjects = await DB.getUserProjects(user.id);
+      if (dbProjects) {
+        const entries: SavedProjectEntry[] = dbProjects.map(p => ({
+          project: DB.dbToBookProject(p as NonNullable<typeof p>),
+          step: p.current_step as CreationStep,
+          lastSaved: p.updated_at,
+        }));
+        setSavedProjects(entries);
+      }
+    } catch (e) {
+      console.error('Failed to load projects:', e);
+    }
+  };
 
   // Scroll to top on step or view change
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [step, view]);
 
-  const trackUsage = (tokens: number) => {
+  const refreshUserUsage = async () => {
     if (!user) return;
-    const updatedUser: User = {
-      ...user,
-      usage: {
-        ...user.usage,
-        tokensUsed: user.usage.tokensUsed + tokens,
-        tokensThisMonth: user.usage.tokensThisMonth + tokens,
+    try {
+      const usage = await DB.refreshUserUsage(user.id);
+      if (usage) {
+        setUser(prev => prev ? {
+          ...prev,
+          tier: usage.subscription_tier as SubscriptionTier,
+          usage: {
+            tokensUsed: usage.tokens_used,
+            tokenLimit: usage.token_limit,
+            tokensThisMonth: usage.tokens_this_month,
+            projectCount: usage.project_count,
+          }
+        } : null);
       }
-    };
-    setUser(updatedUser);
-    localStorage.setItem('bookstudio_user', JSON.stringify(updatedUser));
+    } catch (e) {
+      console.error('Failed to refresh usage:', e);
+    }
   };
 
-  const handleSaveProject = () => {
+  const handleSaveProject = async () => {
+    if (!project.dbId) return;
     setSaveStatus('saving');
-    const newEntry: SavedProjectEntry = {
-      project,
-      step,
-      lastSaved: new Date().toISOString()
-    };
-    
-    const existingIndex = savedProjects.findIndex(p => p.project.id === project.id);
-    let updatedList: SavedProjectEntry[];
-    
-    if (existingIndex > -1) {
-      updatedList = [...savedProjects];
-      updatedList[existingIndex] = newEntry;
-    } else {
-      updatedList = [newEntry, ...savedProjects];
-    }
-    
-    updatedList = updatedList.slice(0, 10);
-    
-    setSavedProjects(updatedList);
-    localStorage.setItem('bookstudio_saved_projects', JSON.stringify(updatedList));
-    
-    setTimeout(() => {
+    try {
+      await DB.saveProjectStep(project.dbId, step);
+      await loadSavedProjects();
       setSaveStatus('saved');
       setTimeout(() => setSaveStatus('idle'), 2000);
-    }, 600);
+    } catch (e) {
+      console.error('Save failed:', e);
+      setSaveStatus('idle');
+    }
   };
 
   const handleLoadProject = (entry: SavedProjectEntry) => {
     setProject(entry.project);
     setStep(entry.step);
+    if (entry.project.outline && entry.project.outline.length > 0) {
+      setActiveChapterId(entry.project.outline[0].id);
+    }
   };
 
-  const handleDeleteSavedProject = (id: string, e: React.MouseEvent) => {
+  const handleDeleteSavedProject = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    const updatedList = savedProjects.filter(p => p.project.id !== id);
-    setSavedProjects(updatedList);
-    localStorage.setItem('bookstudio_saved_projects', JSON.stringify(updatedList));
+    try {
+      await DB.softDeleteProject(id);
+      setSavedProjects(prev => prev.filter(p => p.project.id !== id));
+    } catch (err) {
+      console.error('Delete failed:', err);
+    }
   };
 
-  const handleLogin = (u: User) => {
-    const defaultUsage = {
-      tokensUsed: 0,
-      tokenLimit: 50000,
-      tokensThisMonth: 0,
-      projectCount: 0
-    };
-    const userWithUsage = { ...u, usage: u.usage || defaultUsage, tier: u.tier || 'Free' };
-    localStorage.setItem('bookstudio_user', JSON.stringify(userWithUsage));
-    setUser(userWithUsage);
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem('bookstudio_user');
+  const handleLogout = async () => {
+    await signOut();
     setUser(null);
     setShowAccountSettings(false);
-    window.location.reload();
   };
 
-  const handleUpgrade = (tier: SubscriptionTier) => {
+  const handleUpgrade = async (tier: SubscriptionTier) => {
     if (!user) return;
-    const limits: Record<SubscriptionTier, number> = {
-      Free: 50000,
-      Creator: 1000000,
-      'Pro Author': 5000000,
-      Studio: 20000000,
-      Enterprise: 100000000
-    };
-    const updatedUser: User = {
-      ...user,
-      tier,
-      usage: { ...user.usage, tokenLimit: limits[tier] }
-    };
-    setUser(updatedUser);
-    localStorage.setItem('bookstudio_user', JSON.stringify(updatedUser));
-    setShowBilling(false);
+    try {
+      await DB.updateUserTier(user.id, tier);
+      await refreshUserUsage();
+      setShowBilling(false);
+    } catch (e) {
+      console.error('Upgrade failed:', e);
+    }
   };
 
   const handleDeleteAccount = () => {
@@ -180,14 +203,22 @@ const App: React.FC = () => {
   const prevStep = () => setStep(prev => prev - 1);
 
   const handleStartBrainstorm = async () => {
+    if (!user) return;
     setLoadingStep('Synthesizing Intellectual Foundation...');
     try {
-      const data = await Gemini.brainstormTopic(project);
+      // Create project in DB first
+      const dbId = await DB.createProject(user.id, project);
+      const updatedProject = { ...project, dbId, id: dbId };
+      setProject(updatedProject);
+
+      // Call Edge Function for brainstorming
+      const data = await AI.brainstormTopic(dbId);
       setProject(p => ({ ...p, brainstormData: data }));
-      trackUsage(TOKEN_ESTIMATES.BRAINSTORM);
+      await refreshUserUsage();
       nextStep();
-    } catch (e) {
-      alert("Project failed to initialize. Please try again.");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Project failed to initialize.';
+      alert(message);
       console.error(e);
     } finally {
       setLoadingStep(null);
@@ -195,33 +226,42 @@ const App: React.FC = () => {
   };
 
   const handleGenerateConcepts = async () => {
+    if (!project.dbId) return;
     setLoadingStep('Generating Market Positioning Concepts...');
     try {
-      const results = await Gemini.generateConcepts(project);
+      const results = await AI.generateConcepts(project.dbId);
       setConcepts(results);
-      trackUsage(TOKEN_ESTIMATES.CONCEPT);
+      await refreshUserUsage();
       nextStep();
     } catch (e) {
       console.error(e);
+      alert('Failed to generate concepts. Please try again.');
     } finally {
       setLoadingStep(null);
     }
   };
 
   const handleSelectConcept = async (concept: BookConcept) => {
+    if (!project.dbId) return;
     setLoadingStep('Architecting Manuscript Structure...');
     try {
-      const updatedProject = { ...project, selectedConcept: concept };
-      const toc = await Gemini.generateTOC(updatedProject);
-      
+      const conceptIndex = concepts.indexOf(concept);
+      const toc = await AI.generateTOC(project.dbId, conceptIndex >= 0 ? conceptIndex : 0);
+
       const wordCounts: Record<string, number> = {};
       toc.forEach(chap => { wordCounts[chap.id] = 2000; });
-      
-      setProject({ ...updatedProject, outline: toc, chapterWordCounts: wordCounts });
-      trackUsage(TOKEN_ESTIMATES.TOC);
+
+      setProject(p => ({
+        ...p,
+        selectedConcept: concept,
+        outline: toc,
+        chapterWordCounts: wordCounts
+      }));
+      await refreshUserUsage();
       nextStep();
     } catch (e) {
       console.error(e);
+      alert('Failed to generate table of contents. Please try again.');
     } finally {
       setLoadingStep(null);
     }
@@ -230,12 +270,12 @@ const App: React.FC = () => {
   const handleGenerateChapter = async (chapter: Chapter) => {
     setLoadingStep(`Drafting: ${chapter.title}...`);
     try {
-      const content = await Gemini.generateChapterContent(project, chapter);
+      const { content } = await AI.generateChapterContent(chapter.id);
       setProject(p => ({
         ...p,
         manuscript: { ...p.manuscript, [chapter.id]: content }
       }));
-      trackUsage(TOKEN_ESTIMATES.CHAPTER);
+      await refreshUserUsage();
       setActiveChapterId(chapter.id);
     } catch (e) {
       console.error(e);
@@ -246,12 +286,12 @@ const App: React.FC = () => {
   };
 
   const handleGenerateCover = async () => {
+    if (!project.dbId) return;
     setLoadingStep('Generating Visual Identity...');
     try {
-      const prompt = await Gemini.generateCoverPrompt(project);
-      const imageUrl = await Gemini.generateCoverImage(prompt);
+      const { imageUrl, prompt } = await AI.generateCover(project.dbId);
       setProject(p => ({ ...p, coverPrompt: prompt, coverImage: imageUrl }));
-      trackUsage(TOKEN_ESTIMATES.COVER);
+      await refreshUserUsage();
     } catch (e) {
       console.error(e);
       alert("Failed to generate cover identity. Please retry.");
@@ -262,10 +302,24 @@ const App: React.FC = () => {
 
   const handleStyleSelect = (style: CoverStyle) => {
     setProject(prev => ({ ...prev, coverStyle: style }));
+    // Update style in DB if project exists
+    if (project.dbId) {
+      DB.updateProject(project.dbId, { cover_style: style }).catch(console.error);
+    }
   };
 
+  // Show loading while checking auth
+  if (authLoading) {
+    return (
+      <div className="fixed inset-0 bg-white flex flex-col items-center justify-center">
+        <div className="signature-gradient w-12 h-12 rounded-[1.5rem] animate-spin shadow-xl mb-6"></div>
+        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Initializing Studio</p>
+      </div>
+    );
+  }
+
   if (!user) {
-    return <AuthOverlay onLogin={handleLogin} />;
+    return <AuthOverlay />;
   }
 
   if (isNavigating) {
@@ -288,17 +342,17 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen flex flex-col selection:bg-indigo-100 relative animate-in fade-in duration-700 bg-[#fcfcfd]">
       {showBilling && (
-        <BillingDashboard 
-          user={user} 
-          onClose={() => setShowBilling(false)} 
-          onUpgrade={handleUpgrade} 
+        <BillingDashboard
+          user={user}
+          onClose={() => setShowBilling(false)}
+          onUpgrade={handleUpgrade}
         />
       )}
 
       {showAccountSettings && (
         <div className="fixed inset-0 z-[150] flex items-center justify-center p-6 bg-slate-900/10 backdrop-blur-md animate-in fade-in duration-300">
           <div className="w-full max-w-lg bg-white rounded-[3rem] shadow-2xl border border-slate-100 p-12 overflow-hidden relative">
-            <button 
+            <button
               onClick={() => setShowAccountSettings(false)}
               className="absolute top-10 right-10 text-slate-300 hover:text-slate-900 transition-colors"
             >
@@ -308,7 +362,7 @@ const App: React.FC = () => {
               <h2 className="text-3xl font-bold tracking-tight text-slate-900 serif">Studio Profile</h2>
               <p className="text-sm text-slate-400 mt-2 font-medium">Manage your creative identity and protocols.</p>
             </div>
-            
+
             <div className="space-y-8">
               <div className="flex items-center gap-8 p-8 bg-slate-50 rounded-[2rem] border border-slate-100">
                 {user.picture ? (
@@ -341,13 +395,13 @@ const App: React.FC = () => {
               </div>
 
               <div className="pt-8 border-t border-slate-100 flex flex-col gap-3">
-                <button 
+                <button
                   onClick={handleLogout}
                   className="w-full py-5 bg-slate-900 text-white rounded-2xl font-bold text-sm shadow-xl hover:bg-black transition-all"
                 >
                   Terminate Session
                 </button>
-                <button 
+                <button
                   onClick={handleDeleteAccount}
                   className="w-full py-4 text-red-500 hover:bg-red-50 rounded-2xl font-bold text-[10px] uppercase tracking-widest transition-all"
                 >
@@ -366,43 +420,45 @@ const App: React.FC = () => {
           </div>
           <span className="font-bold tracking-tight text-slate-900">BookStudio <span className="text-slate-400 font-medium">1.0</span></span>
         </div>
-        
+
         <div className="flex items-center gap-6">
-          <button 
-            onClick={handleSaveProject}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all ${
-              saveStatus === 'saved' ? 'bg-green-50 text-green-600' : 'bg-white border border-slate-100 text-slate-500 hover:bg-slate-50'
-            }`}
-          >
-            {saveStatus === 'saving' ? (
-              <i className="fas fa-circle-notch animate-spin"></i>
-            ) : saveStatus === 'saved' ? (
-              <i className="fas fa-check"></i>
-            ) : (
-              <i className="fas fa-save"></i>
-            )}
-            <span>{saveStatus === 'saved' ? 'Saved' : 'Save State'}</span>
-          </button>
+          {project.dbId && (
+            <button
+              onClick={handleSaveProject}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all ${
+                saveStatus === 'saved' ? 'bg-green-50 text-green-600' : 'bg-white border border-slate-100 text-slate-500 hover:bg-slate-50'
+              }`}
+            >
+              {saveStatus === 'saving' ? (
+                <i className="fas fa-circle-notch animate-spin"></i>
+              ) : saveStatus === 'saved' ? (
+                <i className="fas fa-check"></i>
+              ) : (
+                <i className="fas fa-save"></i>
+              )}
+              <span>{saveStatus === 'saved' ? 'Saved' : 'Save State'}</span>
+            </button>
+          )}
 
           <div className="h-6 w-[1px] bg-slate-100"></div>
 
-          <button 
+          <button
             onClick={() => setShowBilling(true)}
             className="hidden md:flex flex-col items-end gap-1 hover:bg-slate-50 px-3 py-1 rounded-lg transition-all"
           >
             <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Token Reserve</span>
             <div className="flex items-center gap-2">
               <div className="w-16 h-1 bg-slate-100 rounded-full overflow-hidden">
-                <div 
-                  className="h-full signature-gradient transition-all duration-1000" 
-                  style={{ width: `${(user.usage.tokensThisMonth / user.usage.tokenLimit) * 100}%` }}
+                <div
+                  className="h-full signature-gradient transition-all duration-1000"
+                  style={{ width: `${Math.min((user.usage.tokensThisMonth / user.usage.tokenLimit) * 100, 100)}%` }}
                 ></div>
               </div>
               <span className="text-[10px] font-bold text-slate-900">{Math.round((user.usage.tokenLimit - user.usage.tokensThisMonth) / 1000)}K</span>
             </div>
           </button>
 
-          <button 
+          <button
             onClick={() => navigateToInfo('enterprise')}
             className="flex items-center gap-2 text-indigo-500 hover:text-indigo-600 transition-colors p-2"
           >
@@ -412,7 +468,7 @@ const App: React.FC = () => {
             <span className="text-[10px] font-bold uppercase tracking-widest">Info</span>
           </button>
 
-          <button 
+          <button
             onClick={() => setShowAccountSettings(true)}
             className="flex items-center gap-3 p-1 pr-4 bg-white border border-slate-100 rounded-full hover:bg-slate-50 hover:shadow-sm transition-all group"
           >
@@ -449,12 +505,12 @@ const App: React.FC = () => {
                 <p className="text-[11px] font-bold uppercase tracking-[0.4em] text-slate-400 mb-6">Bring your expertise to life.</p>
                 <h1 className="text-2xl font-medium tracking-tight mb-6 text-slate-500 leading-relaxed">Turn a single concept into a publishable manuscript using orchestrator models.</h1>
               </div>
-              
+
               <div className="bg-white p-12 rounded-[2.5rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.04)] space-y-12">
                 <div className="space-y-5">
                   <label className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-400 block">Primary Keyword / Theme</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     className="w-full text-slate-900 bg-white border border-slate-100 rounded-xl p-4 text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none shadow-sm transition-all"
                     placeholder="Enter main theme..."
                     value={project.keyword}
@@ -465,7 +521,7 @@ const App: React.FC = () => {
 
                 <div className="space-y-5">
                   <label className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-400 block">Detailed Description / Vision</label>
-                  <textarea 
+                  <textarea
                     rows={6}
                     className="w-full text-slate-900 bg-white border border-slate-100 rounded-[1.5rem] p-5 text-sm font-medium focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none shadow-sm transition-all resize-none leading-relaxed"
                     placeholder="Describe your vision..."
@@ -478,10 +534,10 @@ const App: React.FC = () => {
                   <div className="space-y-4">
                     <label className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-400 block">Genre</label>
                     <div className="relative">
-                      <select 
+                      <select
                         className="w-full appearance-none bg-white border border-slate-100 rounded-xl p-4 pr-10 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm cursor-pointer"
                         value={project.genre}
-                        onChange={e => setProject({...project, genre: e.target.value as any})}
+                        onChange={e => setProject({...project, genre: e.target.value as BookProject['genre']})}
                       >
                         <option>Non-Fiction</option>
                         <option>Business</option>
@@ -495,10 +551,10 @@ const App: React.FC = () => {
                   <div className="space-y-4">
                     <label className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-400 block">Writing Style</label>
                     <div className="relative">
-                      <select 
+                      <select
                         className="w-full appearance-none bg-white border border-slate-100 rounded-xl p-4 pr-10 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm cursor-pointer"
                         value={project.style}
-                        onChange={e => setProject({...project, style: e.target.value as any})}
+                        onChange={e => setProject({...project, style: e.target.value as BookProject['style']})}
                       >
                         <option>Formal</option>
                         <option>Conversational</option>
@@ -513,8 +569,8 @@ const App: React.FC = () => {
 
                 <div className="space-y-5">
                   <label className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-400 block">Primary Audience</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     className="w-full text-slate-900 bg-white border border-slate-100 rounded-xl p-4 text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm transition-all"
                     placeholder="E.g., Professional Leaders..."
                     value={project.audience}
@@ -523,12 +579,12 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="flex flex-col items-center gap-6 pt-6">
-                  <button 
+                  <button
                     onClick={handleStartBrainstorm}
                     disabled={!project.keyword || !project.description}
                     className={`w-full py-6 rounded-full font-bold text-lg transition-all flex items-center justify-center gap-4 ${
                       (project.keyword && project.description)
-                        ? 'signature-gradient text-white shadow-2xl shadow-indigo-100 hover:scale-[1.01] active:scale-[0.99]' 
+                        ? 'signature-gradient text-white shadow-2xl shadow-indigo-100 hover:scale-[1.01] active:scale-[0.99]'
                         : 'bg-slate-50 text-slate-300 border border-slate-100 cursor-not-allowed'
                     }`}
                   >
@@ -547,12 +603,12 @@ const App: React.FC = () => {
               <div className="space-y-6">
                 {savedProjects.length > 0 ? (
                   savedProjects.map((entry) => (
-                    <div 
+                    <div
                       key={entry.project.id}
                       onClick={() => handleLoadProject(entry)}
                       className="group bg-white p-7 rounded-[2rem] border border-slate-100 hover:border-indigo-200 hover:shadow-xl hover:-translate-y-1 transition-all cursor-pointer relative"
                     >
-                      <button 
+                      <button
                         onClick={(e) => handleDeleteSavedProject(entry.project.id, e)}
                         className="absolute top-6 right-6 text-slate-200 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
                       >
@@ -563,7 +619,7 @@ const App: React.FC = () => {
                           {entry.project.genre}
                         </span>
                         <h4 className="font-bold text-slate-900 truncate text-lg serif">
-                          {entry.project.keyword || "Untitled Project"}
+                          {entry.project.selectedConcept?.title || entry.project.keyword || "Untitled Project"}
                         </h4>
                         <div className="flex items-center justify-between mt-5">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-50 px-3 py-1 rounded-full">
@@ -654,10 +710,10 @@ const App: React.FC = () => {
               <h2 className="text-4xl font-bold mt-4 tracking-tight serif">Select Your Book Concept</h2>
               <p className="text-slate-500 mt-4 max-w-xl mx-auto font-medium">We've synthesized 3 unique paths for your manuscript. Choose the one that resonates with your vision.</p>
             </div>
-            
+
             <div className="grid lg:grid-cols-3 gap-8">
               {concepts.map((concept, idx) => (
-                <div 
+                <div
                   key={idx}
                   onClick={() => handleSelectConcept(concept)}
                   className="bg-white p-10 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-2xl hover:-translate-y-2 transition-all duration-500 cursor-pointer group flex flex-col"
@@ -674,7 +730,7 @@ const App: React.FC = () => {
                 </div>
               ))}
             </div>
-            
+
             <div className="flex justify-start">
               <button onClick={prevStep} className="text-sm font-bold text-slate-400 hover:text-slate-900 transition-colors uppercase tracking-widest">
                 <i className="fas fa-arrow-left mr-2"></i> Back
@@ -752,18 +808,18 @@ const App: React.FC = () => {
                          const isDrafted = !!project.manuscript[chap.id];
                          const isActive = activeChapterId === chap.id;
                          return (
-                            <button 
+                            <button
                                key={chap.id}
                                onClick={() => setActiveChapterId(chap.id)}
                                className={`w-full text-left p-4 rounded-2xl border transition-all flex items-center gap-4 ${
-                                  isActive 
-                                    ? 'bg-white border-indigo-200 shadow-md ring-2 ring-indigo-50' 
+                                  isActive
+                                    ? 'bg-white border-indigo-200 shadow-md ring-2 ring-indigo-50'
                                     : 'bg-white border-slate-100 hover:border-indigo-100 text-slate-500'
                                }`}
                             >
                                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                                  isDrafted 
-                                    ? 'bg-green-100 text-green-600' 
+                                  isDrafted
+                                    ? 'bg-green-100 text-green-600'
                                     : isActive ? 'bg-indigo-600 text-white' : 'bg-slate-50 text-slate-400'
                                }`}>
                                   {isDrafted ? <i className="fas fa-check"></i> : idx + 1}
@@ -778,7 +834,7 @@ const App: React.FC = () => {
                          <p className="text-[9px] font-bold text-indigo-600 uppercase tracking-widest mb-1">Writing Intelligence</p>
                          <p className="text-xs text-indigo-900 font-medium leading-relaxed">Synthesis uses 'Pro' logic with thinking cycles for depth.</p>
                       </div>
-                      <button 
+                      <button
                         onClick={nextStep}
                         className="w-full py-4 signature-gradient text-white rounded-[2rem] font-bold text-xs uppercase tracking-widest shadow-xl shadow-indigo-100 hover:scale-[1.02] transition-all"
                       >
@@ -790,7 +846,7 @@ const App: React.FC = () => {
                 {/* Main Content: Chapter Drafting */}
                 <div className="flex-1 bg-white rounded-[3rem] border border-slate-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.04)] min-h-[700px] flex flex-col relative overflow-hidden">
                    {activeChapterId ? (() => {
-                      const chapter = project.outline.find(c => c.id === activeChapterId)!;
+                      const chapter = project.outline!.find(c => c.id === activeChapterId)!;
                       const draftedText = project.manuscript[activeChapterId];
                       return (
                         <div className="flex flex-col h-full animate-in fade-in duration-500">
@@ -800,7 +856,7 @@ const App: React.FC = () => {
                                  <p className="text-xs text-slate-400 font-medium mt-1">Status: {draftedText ? 'Manifested' : 'Synthesizing Placeholder'}</p>
                               </div>
                               {!draftedText && (
-                                 <button 
+                                 <button
                                     onClick={() => handleGenerateChapter(chapter)}
                                     className="px-8 py-3 signature-gradient text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:shadow-lg transition-all"
                                  >
@@ -881,7 +937,7 @@ const App: React.FC = () => {
                             "System will synthesize a unique visual identity including custom high-resolution cover backgrounds tailored to your thesis: {project.selectedConcept?.title}"
                          </p>
                       </div>
-                      <button 
+                      <button
                         onClick={handleGenerateCover}
                         className="w-full py-5 signature-gradient text-white rounded-2xl font-bold text-sm shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-4"
                       >
@@ -928,7 +984,7 @@ const App: React.FC = () => {
 
                    {project.coverImage && (
                       <div className="mt-14 space-y-4">
-                        <button 
+                        <button
                            onClick={nextStep}
                            className="w-full py-5 bg-slate-900 text-white rounded-2xl font-bold shadow-2xl hover:bg-black transition-all flex items-center justify-center gap-4 group"
                         >
@@ -974,7 +1030,7 @@ const App: React.FC = () => {
           <p className="text-sm font-medium leading-relaxed max-w-xs">Professional-grade literature orchestration for authors and experts.</p>
           <p className="text-[11px] font-bold uppercase tracking-widest mt-4">© 2026 Studio Protocols. All rights reserved.</p>
         </div>
-        
+
         <div className="flex gap-24">
           <div className="space-y-6">
             <h4 className="text-[11px] font-bold text-slate-900 uppercase tracking-[0.3em]">Foundation</h4>

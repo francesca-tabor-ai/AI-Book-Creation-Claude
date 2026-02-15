@@ -31,21 +31,22 @@ export type AuthMode = 'SIGN_IN' | 'SIGN_UP' | 'FORGOT_PASSWORD' | 'VERIFY_EMAIL
 
 export interface BookProject {
   id: string;
+  dbId?: string;
   keyword: string;
   description: string;
   genre: BookGenre;
   audience: string;
   style: WritingStyle;
-  coverStyle: CoverStyle; 
+  coverStyle: CoverStyle;
   wordCountGoal: number;
-  
+
   // Progress Data
   brainstormData?: {
     topics: string[];
     researchQuestions: string[];
     thesis: string;
   };
-  
+
   selectedConcept?: BookConcept;
   outline?: Chapter[];
   manuscript: Record<string, string>; // chapterId -> text
