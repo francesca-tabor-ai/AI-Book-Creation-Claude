@@ -51,44 +51,40 @@ const App: React.FC = () => {
   useEffect(() => {
     let cancelled = false;
 
-    // Get initial session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (cancelled) return;
-      if (session) {
-        try {
-          const appUser = await getCurrentAppUser();
-          if (!cancelled) setUser(appUser);
-        } catch (err) {
-          console.error('Failed to load user profile:', err);
-        }
-      }
+    // Safety timeout — if auth never resolves, show the login screen
+    const timeout = setTimeout(() => {
       if (!cancelled) setAuthLoading(false);
-    }).catch(err => {
-      console.error('Failed to get session:', err);
-      if (!cancelled) setAuthLoading(false);
-    });
+    }, 5000);
 
-    // Listen for auth changes
+    // Use onAuthStateChange as the single source of truth
+    // It fires INITIAL_SESSION on setup, then SIGNED_IN/SIGNED_OUT on changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (cancelled) return;
-        if (event === 'SIGNED_IN' && session) {
-          try {
-            const appUser = await getCurrentAppUser();
-            if (!cancelled) setUser(appUser);
-          } catch (err) {
-            console.error('Failed to load user on sign-in:', err);
+        if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
+          if (session) {
+            try {
+              const appUser = await getCurrentAppUser();
+              if (!cancelled) setUser(appUser);
+            } catch (err) {
+              console.error('Failed to load user profile:', err);
+            }
           }
-          if (!cancelled) setAuthLoading(false);
+          if (!cancelled) {
+            setAuthLoading(false);
+            clearTimeout(timeout);
+          }
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
           setAuthLoading(false);
+          clearTimeout(timeout);
         }
       }
     );
 
     return () => {
       cancelled = true;
+      clearTimeout(timeout);
       subscription.unsubscribe();
     };
   }, []);
