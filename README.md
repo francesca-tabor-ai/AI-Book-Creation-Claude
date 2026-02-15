@@ -19,7 +19,7 @@ The AI Book Creation Studio is a high-fidelity, end-to-end literature orchestrat
 
 - **Frontend Stack**: Built with React 19 and Tailwind CSS, featuring a clean, "signature-gradient" aesthetic and a highly responsive modular UI.
 - **AI Integration**: Deep integration with OpenAI (primary) and Anthropic (backup) APIs across multiple models for speed, ideation, architectural logic, and visual asset generation.
-- **Persistence**: Local draft repository using localStorage for session recovery and project management.
+- **Persistence**: Supabase database for project storage and user management, with localStorage for session recovery.
 - **Governance**: Integrated Token Metering and Billing Dashboard to manage consumption across tiered subscription levels (Free to Enterprise).
 - **Security**: Multi-provider authentication (Google GSI & Email) and a dedicated suite of legal/privacy documentation for IP sovereignty.
 
@@ -38,12 +38,16 @@ View your app in AI Studio: https://ai.studio/apps/drive/1JOe8hRgYIo2aH3L7OP8M2E
    npm install
    ```
 
-2. Configure API Keys:
+2. Configure API Keys and Supabase:
    - Open [`.env.local`](.env.local) (click to open in Cursor)
-   - Replace `your_openai_api_key_here` with your actual OpenAI API key (primary)
-   - Replace `your_anthropic_api_key_here` with your actual Anthropic API key (backup)
-   - Get your OpenAI API key from: https://platform.openai.com/api-keys
-   - Get your Anthropic API key from: https://console.anthropic.com/settings/keys
+   - **OpenAI API Key (Primary)**: Replace `your_openai_api_key_here` with your actual OpenAI API key
+     - Get your API key from: https://platform.openai.com/api-keys
+   - **Anthropic API Key (Backup)**: Replace `your_anthropic_api_key_here` with your actual Anthropic API key
+     - Get your API key from: https://console.anthropic.com/settings/keys
+   - **Supabase Configuration**: Replace the Supabase URL and anon key with your project credentials
+     - Get your Supabase credentials from: https://app.supabase.com/project/_/settings/api
+     - Replace `https://your-project-ref.supabase.co` with your Supabase project URL
+     - Replace `your_supabase_anon_key_here` with your Supabase anon public key
 
 3. Run the app:
    ```bash
