@@ -121,10 +121,15 @@ const App: React.FC = () => {
     if (!user) return;
     try {
       const dbProjects = await DB.getUserProjects(user.id);
+      console.log('[DEBUG] dbProjects raw:', JSON.stringify(dbProjects?.map(p => ({
+        id: p.id, title: p.title, current_step: p.current_step,
+        book_concepts: p.book_concepts,
+      }))));
       if (dbProjects) {
         const entries: SavedProjectEntry[] = dbProjects.map(p => {
           const bookConcept = (p.book_concepts as Record<string, unknown>[])?.[0];
           const conceptsJson = (bookConcept?.concepts_json ?? []) as BookConcept[];
+          console.log('[DEBUG] project', p.title, 'bookConcept:', JSON.stringify(bookConcept), 'conceptsJson:', JSON.stringify(conceptsJson));
           return {
             project: DB.dbToBookProject(p as NonNullable<typeof p>),
             concepts: Array.isArray(conceptsJson) ? conceptsJson : [],
@@ -180,6 +185,7 @@ const App: React.FC = () => {
   };
 
   const handleLoadProject = (entry: SavedProjectEntry) => {
+    console.log('[DEBUG] handleLoadProject entry.concepts:', JSON.stringify(entry.concepts), 'step:', entry.step);
     setProject(entry.project);
     setConcepts(entry.concepts);
     setStep(entry.step);
