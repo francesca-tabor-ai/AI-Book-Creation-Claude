@@ -47,6 +47,7 @@ const App: React.FC = () => {
   const [concepts, setConcepts] = useState<BookConcept[]>([]);
   const [savedProjects, setSavedProjects] = useState<SavedProjectEntry[]>([]);
   const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Supabase auth state management
   useEffect(() => {
@@ -265,7 +266,7 @@ const App: React.FC = () => {
       nextStep();
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Project failed to initialize.';
-      alert(message);
+      setErrorMessage(message);
       console.error(e);
     } finally {
       setLoadingStep(null);
@@ -284,7 +285,7 @@ const App: React.FC = () => {
       nextStep();
     } catch (e) {
       console.error(e);
-      alert('Failed to generate concepts. Please try again.');
+      setErrorMessage('Failed to generate concepts. Please try again.');
     } finally {
       setLoadingStep(null);
     }
@@ -310,7 +311,7 @@ const App: React.FC = () => {
       nextStep();
     } catch (e) {
       console.error(e);
-      alert('Failed to generate table of contents. Please try again.');
+      setErrorMessage('Failed to generate table of contents. Please try again.');
     } finally {
       setLoadingStep(null);
     }
@@ -328,7 +329,7 @@ const App: React.FC = () => {
       setActiveChapterId(chapter.id);
     } catch (e) {
       console.error(e);
-      alert("Failed to synthesize chapter content. Ensure you have sufficient token reserves.");
+      setErrorMessage("Failed to synthesize chapter content. Ensure you have sufficient token reserves.");
     } finally {
       setLoadingStep(null);
     }
@@ -343,7 +344,7 @@ const App: React.FC = () => {
       await refreshUserUsage();
     } catch (e) {
       console.error(e);
-      alert("Failed to generate cover identity. Please retry.");
+      setErrorMessage("Failed to generate cover identity. Please retry.");
     } finally {
       setLoadingStep(null);
     }
@@ -543,6 +544,22 @@ const App: React.FC = () => {
             <div className="signature-gradient w-16 h-16 rounded-[2rem] animate-spin shadow-2xl mb-12"></div>
             <h2 className="text-4xl font-bold tracking-tight text-slate-900 text-center px-8 animate-pulse serif">{loadingStep}</h2>
             <p className="mt-4 text-slate-500 font-medium uppercase tracking-[0.3em] text-[10px]">Orchestrating Intellectual Assets</p>
+          </div>
+        )}
+
+        {errorMessage && (
+          <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[200] max-w-lg w-full animate-in slide-in-from-top-4 duration-300">
+            <div className="bg-red-50 border border-red-200 rounded-2xl shadow-xl p-6 flex items-start gap-4">
+              <div className="w-8 h-8 bg-red-100 rounded-full flex items-center justify-center flex-shrink-0">
+                <i className="fas fa-exclamation-triangle text-red-500 text-sm"></i>
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-bold text-red-800">{errorMessage}</p>
+              </div>
+              <button onClick={() => setErrorMessage(null)} className="text-red-400 hover:text-red-600 transition-colors">
+                <i className="fas fa-times"></i>
+              </button>
+            </div>
           </div>
         )}
 
