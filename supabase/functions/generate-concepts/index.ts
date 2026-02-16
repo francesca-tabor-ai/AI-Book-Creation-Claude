@@ -98,7 +98,16 @@ Research Questions: ${(brainstormMap?.researchQuestions as string[] || []).join(
       temperature: 0.7,
     });
 
-    const concepts = JSON.parse(resultText);
+    let concepts = JSON.parse(resultText);
+    // Ensure concepts is always an array
+    if (!Array.isArray(concepts)) {
+      if (concepts && typeof concepts === 'object') {
+        // If AI returned an object with a concepts/data key, extract it
+        concepts = concepts.concepts || concepts.data || [concepts];
+      } else {
+        concepts = [];
+      }
+    }
 
     // Save concepts
     if (concept) {

@@ -121,18 +121,21 @@ const App: React.FC = () => {
     if (!user) return;
     try {
       const dbProjects = await DB.getUserProjects(user.id);
-      console.log('[DEBUG] dbProjects raw:', JSON.stringify(dbProjects?.map(p => ({
-        id: p.id, title: p.title, current_step: p.current_step,
-        book_concepts: p.book_concepts,
-      }))));
       if (dbProjects) {
         const entries: SavedProjectEntry[] = dbProjects.map(p => {
           const bookConcept = (p.book_concepts as Record<string, unknown>[])?.[0];
-          const conceptsJson = (bookConcept?.concepts_json ?? []) as BookConcept[];
-          console.log('[DEBUG] project', p.title, 'bookConcept:', JSON.stringify(bookConcept), 'conceptsJson:', JSON.stringify(conceptsJson));
+          const rawConcepts = bookConcept?.concepts_json;
+          // Handle concepts_json being an array, a single object, or empty
+          let conceptsList: BookConcept[] = [];
+          if (Array.isArray(rawConcepts)) {
+            conceptsList = rawConcepts as BookConcept[];
+          } else if (rawConcepts && typeof rawConcepts === 'object' && (rawConcepts as Record<string, unknown>).title) {
+            // Single concept object — wrap in array
+            conceptsList = [rawConcepts as BookConcept];
+          }
           return {
             project: DB.dbToBookProject(p as NonNullable<typeof p>),
-            concepts: Array.isArray(conceptsJson) ? conceptsJson : [],
+            concepts: conceptsList,
             step: p.current_step as CreationStep,
             lastSaved: p.updated_at,
           };
@@ -185,7 +188,6 @@ const App: React.FC = () => {
   };
 
   const handleLoadProject = (entry: SavedProjectEntry) => {
-    console.log('[DEBUG] handleLoadProject entry.concepts:', JSON.stringify(entry.concepts), 'step:', entry.step);
     setProject(entry.project);
     setConcepts(entry.concepts);
     setStep(entry.step);
