@@ -63,13 +63,22 @@ serve(async (req: Request) => {
     }
 
     const bookConcept = project.book_concepts?.[0];
-    const conceptsJson = (bookConcept?.concepts_json || []) as Array<{
+    const rawConcepts = bookConcept?.concepts_json;
+    // Handle concepts_json being a single object or an array
+    let conceptsArray: Array<{
       title: string;
       tagline: string;
       description: string;
       targetMarket: string;
     }>;
-    const selectedConcept = conceptsJson[conceptIndex] || conceptsJson[0];
+    if (Array.isArray(rawConcepts)) {
+      conceptsArray = rawConcepts;
+    } else if (rawConcepts && typeof rawConcepts === 'object' && (rawConcepts as Record<string, unknown>).title) {
+      conceptsArray = [rawConcepts as { title: string; tagline: string; description: string; targetMarket: string }];
+    } else {
+      conceptsArray = [];
+    }
+    const selectedConcept = conceptsArray[conceptIndex] || conceptsArray[0];
 
     if (!selectedConcept) {
       return new Response(JSON.stringify({ error: 'No concept found' }), {

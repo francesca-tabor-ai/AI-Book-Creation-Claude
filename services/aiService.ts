@@ -47,6 +47,7 @@ export async function generateTOC(projectId: string, conceptIndex: number): Prom
     body: { projectId, conceptIndex },
   });
   if (error) {
+    console.error('generate-toc error:', error, 'data:', data);
     if (error.message?.includes('401') || error.message?.includes('Unauthorized')) {
       throw new Error('Authentication failed. Please sign in again and try again.');
     }
