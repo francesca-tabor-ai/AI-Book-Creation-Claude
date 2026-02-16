@@ -262,7 +262,9 @@ const App: React.FC = () => {
     setLoadingStep('Generating Market Positioning Concepts...');
     try {
       const results = await AI.generateConcepts(project.dbId);
-      setConcepts(results);
+      // Ensure results is an array (Edge Function may return wrapped object)
+      const conceptsArray = Array.isArray(results) ? results : (results as Record<string, unknown>)?.concepts as BookConcept[] ?? [];
+      setConcepts(conceptsArray);
       await refreshUserUsage();
       nextStep();
     } catch (e) {
