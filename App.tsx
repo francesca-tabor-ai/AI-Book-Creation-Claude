@@ -14,6 +14,7 @@ const InfoPage = lazy(() => import('./components/InfoPage'));
 
 interface SavedProjectEntry {
   project: BookProject;
+  concepts: BookConcept[];
   step: CreationStep;
   lastSaved: string;
 }
@@ -121,11 +122,16 @@ const App: React.FC = () => {
     try {
       const dbProjects = await DB.getUserProjects(user.id);
       if (dbProjects) {
-        const entries: SavedProjectEntry[] = dbProjects.map(p => ({
-          project: DB.dbToBookProject(p as NonNullable<typeof p>),
-          step: p.current_step as CreationStep,
-          lastSaved: p.updated_at,
-        }));
+        const entries: SavedProjectEntry[] = dbProjects.map(p => {
+          const bookConcept = (p.book_concepts as Record<string, unknown>[])?.[0];
+          const conceptsJson = (bookConcept?.concepts_json ?? []) as BookConcept[];
+          return {
+            project: DB.dbToBookProject(p as NonNullable<typeof p>),
+            concepts: Array.isArray(conceptsJson) ? conceptsJson : [],
+            step: p.current_step as CreationStep,
+            lastSaved: p.updated_at,
+          };
+        });
         setSavedProjects(entries);
       }
     } catch (e) {
@@ -175,6 +181,7 @@ const App: React.FC = () => {
 
   const handleLoadProject = (entry: SavedProjectEntry) => {
     setProject(entry.project);
+    setConcepts(entry.concepts);
     setStep(entry.step);
     if (entry.project.outline && entry.project.outline.length > 0) {
       setActiveChapterId(entry.project.outline[0].id);
