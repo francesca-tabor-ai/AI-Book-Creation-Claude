@@ -18,13 +18,18 @@ serve(async (req: Request) => {
     }
 
     const token = authHeader.replace('Bearer ', '');
-    const supabase = createClient(
+    const supabaseAuth = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_ANON_KEY')!,
       { global: { headers: { Authorization: authHeader } } }
     );
+    // Admin client for DB operations (bypasses RLS)
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+    );
 
-    const { data: { user }, error: userError } = await supabase.auth.getUser(token);
+    const { data: { user }, error: userError } = await supabaseAuth.auth.getUser(token);
     if (userError || !user) {
       console.error('Auth error:', userError?.message);
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
@@ -108,15 +113,18 @@ Structural Integrity Rules:
 - Show a clear narrative or intellectual progression.
 - Avoid generic chapter naming (e.g., 'Introduction' should be thematic).
 
-You MUST respond with valid JSON as an array:
-[
-  {
-    "id": "ch1",
-    "title": "Chapter title",
-    "summary": "Chapter narrative goal and summary.",
-    "sections": ["Subsection 1", "Subsection 2", ...]
-  }
-]`;
+You MUST respond with valid JSON containing a "chapters" key with an array value:
+{
+  "chapters": [
+    {
+      "id": "ch1",
+      "title": "Chapter title",
+      "summary": "Chapter narrative goal and summary.",
+      "sections": ["Subsection 1", "Subsection 2", ...]
+    }
+  ]
+}
+Generate ALL 8-12 chapters in a single response. Do not stop early.`;
 
     const userPrompt = `Selected Concept: ${selectedConcept.title}
 Tagline: ${selectedConcept.tagline}
@@ -125,12 +133,26 @@ Concept Summary: ${selectedConcept.description}`;
 
     const resultText = await generateWithAI(systemPrompt, userPrompt, {
       jsonSchema: {},
-      maxTokens: 4000,
+      maxTokens: 8000,
       model: 'gpt-4o',
       temperature: 0.7,
     });
 
-    const chapters = JSON.parse(resultText);
+    let chapters = JSON.parse(resultText);
+
+    // Ensure chapters is always an array (AI may return a single object or wrapped response)
+    if (!Array.isArray(chapters)) {
+      if (chapters && typeof chapters === 'object') {
+        const extracted = chapters.chapters || chapters.data || chapters.toc || chapters.table_of_contents;
+        if (Array.isArray(extracted)) {
+          chapters = extracted;
+        } else {
+          chapters = [chapters];
+        }
+      } else {
+        chapters = [];
+      }
+    }
 
     // Delete existing chapters and insert new ones
     await supabase.from('chapters').delete().eq('project_id', projectId);

@@ -18,13 +18,18 @@ serve(async (req: Request) => {
     }
 
     const token = authHeader.replace('Bearer ', '');
-    const supabase = createClient(
+    const supabaseAuth = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_ANON_KEY')!,
       { global: { headers: { Authorization: authHeader } } }
     );
+    // Admin client for DB operations (bypasses RLS)
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+    );
 
-    const { data: { user }, error: userError } = await supabase.auth.getUser(token);
+    const { data: { user }, error: userError } = await supabaseAuth.auth.getUser(token);
     if (userError || !user) {
       console.error('Auth error:', userError?.message);
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
@@ -77,15 +82,18 @@ Requirements:
 
 Avoid generic titles. Mix Provocative, Intellectual Prestige, and Commercial Appeal.
 
-You MUST respond with valid JSON as an array of objects:
-[
-  {
-    "title": "...",
-    "tagline": "...",
-    "description": "Detailed book concept description.",
-    "targetMarket": "Target persona and knowledge level."
-  }
-]`;
+You MUST respond with valid JSON containing a "concepts" key with an array of 3 objects:
+{
+  "concepts": [
+    {
+      "title": "...",
+      "tagline": "...",
+      "description": "Detailed book concept description.",
+      "targetMarket": "Target persona and knowledge level."
+    }
+  ]
+}
+Generate exactly 3 concepts. Do not stop early.`;
 
     const userPrompt = `Keyword: ${project.seed_keyword}
 Description: ${project.description || ''}
